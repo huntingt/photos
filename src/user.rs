@@ -1,10 +1,10 @@
+use crate::common::{join, require_key, ApiError, ApiResult, AppState};
 use hyper::{Body, Request, Response, StatusCode};
-use crate::common::{ApiError, ApiResult, join, AppState, require_key};
-use routerify::Router;
-use routerify::ext::RequestExt;
-use serde::{Serialize, Deserialize};
-use rusqlite::{params, OptionalExtension};
 use rand::{thread_rng, Rng};
+use routerify::ext::RequestExt;
+use routerify::Router;
+use rusqlite::{params, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use tokio::task::block_in_place;
 
 #[derive(Deserialize)]
@@ -15,7 +15,7 @@ struct CreateReq<'a> {
 
 #[derive(Serialize, Deserialize)]
 struct KeyReqRes<'a> {
-    key: &'a str
+    key: &'a str,
 }
 
 #[derive(Serialize)]
@@ -31,21 +31,19 @@ async fn create(req: Request<Body>) -> ApiResult<Response<Body>> {
 
     let app_state = parts.data::<AppState>().unwrap();
     let db = app_state.pool.get()?;
-    
+
     block_in_place(move || {
         let salt: [u8; 32] = thread_rng().gen();
-        let hash = argon2::hash_encoded(
-            json.password.as_bytes(),
-            &salt,
-            &app_state.argon_config
-        )?;
+        let hash = argon2::hash_encoded(json.password.as_bytes(), &salt, &app_state.argon_config)?;
 
         let user_id: i64 = thread_rng().gen();
 
-        db.execute("INSERT OR IGNORE INTO
+        db.execute(
+            "INSERT OR IGNORE INTO
             users (user_id, email, password)
             VALUES (?, ?, ?)",
-            params![user_id, json.email, hash])?;
+            params![user_id, json.email, hash],
+        )?;
 
         Ok(Response::builder()
             .status(StatusCode::OK)
@@ -68,27 +66,30 @@ async fn login(req: Request<Body>) -> ApiResult<Response<Body>> {
     let tx = db.transaction()?;
 
     block_in_place(move || {
-        let maybe: Option<(String, i64)> = tx.query_row(
-            "SELECT password, user_id FROM users WHERE email = ?",
-            params![json.email],
-            |row| Ok((row.get(0)?, row.get(1)?))
-        ).optional()?;
+        let maybe: Option<(String, i64)> = tx
+            .query_row(
+                "SELECT password, user_id FROM users WHERE email = ?",
+                params![json.email],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
 
         if let Some((hash, user_id)) = maybe {
             if argon2::verify_encoded(&hash, json.password.as_bytes())? {
-                tx.execute("INSERT INTO sessions (key, user_id)
+                tx.execute(
+                    "INSERT INTO sessions (key, user_id)
                     VALUES (?, ?)",
-                    params![key, user_id])?;
+                    params![key, user_id],
+                )?;
 
                 tx.commit()?;
-        
-                let response = serde_json::to_string(&KeyReqRes {
-                    key: &key
-                })?;
+
+                let response = serde_json::to_string(&KeyReqRes { key: &key })?;
 
                 return Ok(Response::builder()
                     .status(StatusCode::OK)
-                    .body(Body::from(response)).unwrap());
+                    .body(Body::from(response))
+                    .unwrap());
             }
         }
 
@@ -106,14 +107,16 @@ async fn sessions(req: Request<Body>) -> ApiResult<Response<Body>> {
     let tx = db.transaction()?;
 
     block_in_place(move || {
-        let user_id: i64 = tx.query_row(
-            "SELECT user_id FROM sessions WHERE key = ?",
-            params![key],
-            |row| row.get(0)
-        ).optional()?.ok_or(ApiError::Unauthorized)?;
+        let user_id: i64 = tx
+            .query_row(
+                "SELECT user_id FROM sessions WHERE key = ?",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(ApiError::Unauthorized)?;
 
-        let mut statement = tx.prepare(
-            "SELECT key FROM sessions WHERE user_id = ?")?;
+        let mut statement = tx.prepare("SELECT key FROM sessions WHERE user_id = ?")?;
 
         let keys = statement
             .query_map(params![user_id], |row| row.get(0))?
@@ -124,7 +127,7 @@ async fn sessions(req: Request<Body>) -> ApiResult<Response<Body>> {
         let json = serde_json::to_string(&SessionsRes {
             key_prefixes: prefixes,
         })?;
-        
+
         Ok(Response::builder()
             .status(StatusCode::OK)
             .body(Body::from(json))
@@ -151,15 +154,20 @@ async fn logout(req: Request<Body>) -> ApiResult<Response<Body>> {
     let tx = db.transaction()?;
 
     block_in_place(move || {
-        let user_id: i64 = tx.query_row(
-            "SELECT user_id FROM sessions WHERE key = ?",
-            params![key],
-            |row| row.get(0)
-        ).optional()?.ok_or(ApiError::Unauthorized)?;
+        let user_id: i64 = tx
+            .query_row(
+                "SELECT user_id FROM sessions WHERE key = ?",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(ApiError::Unauthorized)?;
 
-        tx.execute("DELETE FROM sessions WHERE
+        tx.execute(
+            "DELETE FROM sessions WHERE
             user_id = ? AND key GLOB ? || '*'",
-            params![user_id, json.key])?;
+            params![user_id, json.key],
+        )?;
 
         tx.commit()?;
 

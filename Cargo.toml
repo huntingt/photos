@@ -21,3 +21,5 @@ serde_json = "*"
 rand = "*"
 rust-argon2 = "*"
 base64 = "*"
+
+libvips = "*"

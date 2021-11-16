@@ -1,28 +1,30 @@
 mod common;
+mod file;
 mod user;
 
+use common::{ApiError, AppState};
 use hyper::{Body, Response, Server, StatusCode};
 use routerify::{Router, RouterService};
 use std::net::SocketAddr;
-use common::{ApiError, AppState};
 
 async fn handle_error(error: routerify::RouteError) -> Response<Body> {
     let api_error = error.downcast::<ApiError>().unwrap();
 
     match api_error.as_ref() {
-        ApiError::Unauthorized => Response::builder()
-            .status(StatusCode::UNAUTHORIZED),
-        ApiError::NotFound => Response::builder()
-            .status(StatusCode::NOT_FOUND),
-        ApiError::Hyper(_) |
-        ApiError::R2D2(_) |
-        ApiError::Sqlite(_) |
-        ApiError::Argon(_) => Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR),
-        ApiError::BadRequest |
-        ApiError::Json(_) => Response::builder()
-            .status(StatusCode::BAD_REQUEST),
-    }.body(Body::from(api_error.to_string())).unwrap()
+        ApiError::Unauthorized => Response::builder().status(StatusCode::UNAUTHORIZED),
+        ApiError::NotFound => Response::builder().status(StatusCode::NOT_FOUND),
+        ApiError::Hyper(_)
+        | ApiError::R2D2(_)
+        | ApiError::Sqlite(_)
+        | ApiError::Argon(_)
+        | ApiError::IO(_)
+        | ApiError::Vips(_) => Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR),
+        ApiError::BadRequest | ApiError::Json(_) => {
+            Response::builder().status(StatusCode::BAD_REQUEST)
+        }
+    }
+    .body(Body::from(api_error.to_string()))
+    .unwrap()
 }
 
 async fn shutdown_signal() {
@@ -33,13 +35,19 @@ async fn shutdown_signal() {
 
 #[tokio::main]
 async fn main() {
+    // Set up libvips for use
+    let vips = libvips::VipsApp::new("vips", true).unwrap();
+    vips.concurrency_set(1);
+
+    let state = AppState::new();
+    state.create_dirs().expect("Couldn't set up directories");
+
     let router = Router::builder()
         // Provide app state to routes
-        .data(AppState::new())
-
+        .data(state)
         // Routes
         .scope("/user", user::router())
-
+        .scope("/file", file::router())
         // Not found for invalid paths
         .any(|_| async { Err(ApiError::NotFound) })
         .err_handler(handle_error)
@@ -58,4 +66,6 @@ async fn main() {
         eprintln!("Server error: {}", err);
     }
     println!("\rShutting down...");
+
+    drop(vips);
 }
