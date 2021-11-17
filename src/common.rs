@@ -1,76 +1,30 @@
+use crate::error::{ApiError, ApiResult};
+use crate::wire::Metadata;
 use hyper::Body;
-use r2d2_sqlite::SqliteConnectionManager;
-use std::fmt;
+use rand::{thread_rng, Rng};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug)]
-pub enum ApiError {
-    Unauthorized,
-    NotFound,
-    BadRequest,
-    Hyper(hyper::Error),
-    Json(serde_json::Error),
-    R2D2(r2d2::Error),
-    Sqlite(rusqlite::Error),
-    Argon(argon2::Error),
-    IO(std::io::Error),
-    Vips(libvips::error::Error),
+#[derive(Serialize, Deserialize, Debug)]
+pub struct User<'a> {
+    pub email: &'a str,
+    pub password: &'a str,
 }
 
-impl std::error::Error for ApiError {}
-
-impl fmt::Display for ApiError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
+#[derive(Serialize, Deserialize, Debug)]
+pub struct File<'a> {
+    pub owner_id: &'a str,
+    pub width: i32,
+    pub height: i32,
+    pub metadata: Metadata<'a>,
 }
-
-impl From<hyper::Error> for ApiError {
-    fn from(error: hyper::Error) -> Self {
-        ApiError::Hyper(error)
-    }
-}
-
-impl From<serde_json::Error> for ApiError {
-    fn from(error: serde_json::Error) -> Self {
-        ApiError::Json(error)
-    }
-}
-
-impl From<r2d2::Error> for ApiError {
-    fn from(error: r2d2::Error) -> Self {
-        ApiError::R2D2(error)
-    }
-}
-
-impl From<rusqlite::Error> for ApiError {
-    fn from(error: rusqlite::Error) -> Self {
-        ApiError::Sqlite(error)
-    }
-}
-
-impl From<argon2::Error> for ApiError {
-    fn from(error: argon2::Error) -> Self {
-        ApiError::Argon(error)
-    }
-}
-
-impl From<std::io::Error> for ApiError {
-    fn from(error: std::io::Error) -> Self {
-        ApiError::IO(error)
-    }
-}
-
-impl From<libvips::error::Error> for ApiError {
-    fn from(error: libvips::error::Error) -> Self {
-        ApiError::Vips(error)
-    }
-}
-
-pub type ApiResult<T> = Result<T, ApiError>;
 
 pub struct AppState {
-    pub pool: r2d2::Pool<SqliteConnectionManager>,
+    pub users: sled::Tree,
+    pub emails: sled::Tree,
+    pub sessions: sled::Tree,
+    pub files: sled::Tree,
+
     pub argon_config: argon2::Config<'static>,
     pub upload_path: PathBuf,
     pub medium_path: PathBuf,
@@ -79,17 +33,16 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
-        let manager = SqliteConnectionManager::memory();
-        let pool = r2d2::Pool::new(manager).unwrap();
-
-        pool.get()
-            .unwrap()
-            .execute_batch(include_str!("setup.sql"))
-            .unwrap();
+        let db = sled::Config::new().temporary(true).open().unwrap();
 
         AppState {
-            pool: pool,
+            users: db.open_tree(b"users").unwrap(),
+            emails: db.open_tree(b"emails").unwrap(),
+            sessions: db.open_tree(b"sessions").unwrap(),
+            files: db.open_tree(b"files").unwrap(),
+
             argon_config: argon2::Config::default(),
+
             upload_path: PathBuf::from("data/uploads"),
             medium_path: PathBuf::from("data/medium"),
             small_path: PathBuf::from("data/small"),
@@ -125,4 +78,9 @@ pub fn require_key(parts: &hyper::http::request::Parts) -> ApiResult<&str> {
         .find(|(k, _)| k == &"key")
         .ok_or(ApiError::Unauthorized)?;
     Ok(key)
+}
+
+pub fn new_id(size: usize) -> String {
+    let bytes: Vec<u8> = (0..size).map(|_| thread_rng().gen()).collect();
+    base64::encode_config(&bytes, base64::URL_SAFE_NO_PAD)
 }

@@ -11,9 +11,8 @@ routerify = "*"
 querystring = "*"
 futures = "*"
 
-r2d2 = "*"
-r2d2_sqlite = "*"
-rusqlite = "*"
+sled = "*"
+bincode = "*"
 
 serde = { version = "*", features = ["derive"] }
 serde_json = "*"

@@ -1,49 +1,60 @@
-use crate::common::{join, require_key, ApiError, ApiResult, AppState};
+use crate::{
+    common::{join, new_id, require_key, AppState, User},
+    error::{ApiError, ApiResult},
+    wire::{Key, SessionsList, UserDetails},
+};
 use hyper::{Body, Request, Response, StatusCode};
 use rand::{thread_rng, Rng};
 use routerify::ext::RequestExt;
 use routerify::Router;
-use rusqlite::{params, OptionalExtension};
-use serde::{Deserialize, Serialize};
+use sled::Transactional;
 use tokio::task::block_in_place;
 
-#[derive(Deserialize)]
-struct CreateReq<'a> {
-    email: &'a str,
-    password: &'a str,
+fn hash_password(password: &[u8], config: &argon2::Config) -> ApiResult<String> {
+    let salt: [u8; 32] = thread_rng().gen();
+    let hash = argon2::hash_encoded(password, &salt, config)?;
+
+    Ok(hash)
 }
 
-#[derive(Serialize, Deserialize)]
-struct KeyReqRes<'a> {
-    key: &'a str,
-}
-
-#[derive(Serialize)]
-struct SessionsRes<'a> {
-    key_prefixes: Vec<&'a str>,
+fn verify_password(hash: &str, password: &str) -> ApiResult<()> {
+    if !argon2::verify_encoded(hash, password.as_bytes())? {
+        return Err(ApiError::Unauthorized.into());
+    }
+    Ok(())
 }
 
 async fn create(req: Request<Body>) -> ApiResult<Response<Body>> {
     let (parts, body) = req.into_parts();
 
     let entire_body = join(body).await?;
-    let json: CreateReq = serde_json::from_slice(&entire_body)?;
-
-    let app_state = parts.data::<AppState>().unwrap();
-    let db = app_state.pool.get()?;
+    let json: UserDetails = serde_json::from_slice(&entire_body)?;
 
     block_in_place(move || {
-        let salt: [u8; 32] = thread_rng().gen();
-        let hash = argon2::hash_encoded(json.password.as_bytes(), &salt, &app_state.argon_config)?;
+        let AppState {
+            ref users,
+            ref emails,
+            ref argon_config,
+            ..
+        } = parts.data::<AppState>().unwrap();
 
-        let user_id: i64 = thread_rng().gen();
+        let user_id = new_id(8);
+        let hash = hash_password(json.password.as_bytes(), argon_config)?;
 
-        db.execute(
-            "INSERT OR IGNORE INTO
-            users (user_id, email, password)
-            VALUES (?, ?, ?)",
-            params![user_id, json.email, hash],
-        )?;
+        let user = User {
+            email: json.email,
+            password: &hash,
+        };
+
+        (users, emails).transaction(|(users, emails)| {
+            if emails.insert(json.email, user_id.as_bytes())?.is_some() {
+                return Err(ApiError::EmailTaken.into());
+            }
+
+            users.insert(user_id.as_bytes(), bincode::serialize(&user).unwrap())?;
+
+            Ok(())
+        })?;
 
         Ok(Response::builder()
             .status(StatusCode::OK)
@@ -56,44 +67,41 @@ async fn login(req: Request<Body>) -> ApiResult<Response<Body>> {
     let (parts, body) = req.into_parts();
 
     let entire_body = join(body).await?;
-    let json: CreateReq = serde_json::from_slice(&entire_body)?;
-
-    let key_bytes: [u8; 32] = thread_rng().gen();
-    let key = base64::encode_config(&key_bytes, base64::URL_SAFE_NO_PAD);
-
-    let app_state = parts.data::<AppState>().unwrap();
-    let mut db = app_state.pool.get()?;
-    let tx = db.transaction()?;
+    let json: UserDetails = serde_json::from_slice(&entire_body)?;
 
     block_in_place(move || {
-        let maybe: Option<(String, i64)> = tx
-            .query_row(
-                "SELECT password, user_id FROM users WHERE email = ?",
-                params![json.email],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
+        let AppState {
+            ref users,
+            ref emails,
+            ref sessions,
+            ..
+        } = parts.data::<AppState>().unwrap();
 
-        if let Some((hash, user_id)) = maybe {
-            if argon2::verify_encoded(&hash, json.password.as_bytes())? {
-                tx.execute(
-                    "INSERT INTO sessions (key, user_id)
-                    VALUES (?, ?)",
-                    params![key, user_id],
-                )?;
+        let key = new_id(32);
 
-                tx.commit()?;
+        let extended_key = (users, emails, sessions).transaction(|(users, emails, sessions)| {
+            let user_id = emails.get(json.email)?.ok_or(ApiError::Unauthorized)?;
 
-                let response = serde_json::to_string(&KeyReqRes { key: &key })?;
+            let user_bytes = users.get(&user_id)?.unwrap();
+            let user: User = bincode::deserialize(&user_bytes).unwrap();
 
-                return Ok(Response::builder()
-                    .status(StatusCode::OK)
-                    .body(Body::from(response))
-                    .unwrap());
-            }
-        }
+            verify_password(&user.password, &json.password)?;
 
-        Err(ApiError::Unauthorized)
+            let extended_key = [user_id.as_ref(), b".", key.as_bytes()].concat();
+
+            sessions.insert(extended_key.clone(), b"")?;
+
+            Ok(extended_key)
+        })?;
+
+        let response = serde_json::to_string(&Key {
+            key: std::str::from_utf8(&extended_key).unwrap(),
+        })?;
+
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::from(response))
+            .unwrap())
     })
 }
 
@@ -102,35 +110,28 @@ async fn sessions(req: Request<Body>) -> ApiResult<Response<Body>> {
 
     let key = require_key(&parts)?;
 
-    let app_state = parts.data::<AppState>().unwrap();
-    let mut db = app_state.pool.get()?;
-    let tx = db.transaction()?;
+    let (user_id, _) = key.split_once('.').ok_or(ApiError::BadRequest)?;
 
-    block_in_place(move || {
-        let user_id: i64 = tx
-            .query_row(
-                "SELECT user_id FROM sessions WHERE key = ?",
-                params![key],
-                |row| row.get(0),
-            )
-            .optional()?
-            .ok_or(ApiError::Unauthorized)?;
+    block_in_place(|| {
+        let AppState { ref sessions, .. } = parts.data::<AppState>().unwrap();
 
-        let mut statement = tx.prepare("SELECT key FROM sessions WHERE user_id = ?")?;
+        let mut prefixes = vec![];
 
-        let keys = statement
-            .query_map(params![user_id], |row| row.get(0))?
-            .collect::<Result<Vec<String>, _>>()?;
+        sessions.get(key)?.ok_or(ApiError::Unauthorized)?;
 
-        let prefixes = keys.iter().map(|s| &s[..8]).collect();
+        for maybe_pair in sessions.scan_prefix(&user_id) {
+            let (key, _) = maybe_pair?;
+            let string = String::from(std::str::from_utf8(key.as_ref()).unwrap());
+            prefixes.push(string);
+        }
 
-        let json = serde_json::to_string(&SessionsRes {
+        let response = serde_json::to_string(&SessionsList {
             key_prefixes: prefixes,
         })?;
 
         Ok(Response::builder()
             .status(StatusCode::OK)
-            .body(Body::from(json))
+            .body(Body::from(response))
             .unwrap())
     })
 }
@@ -141,35 +142,21 @@ async fn logout(req: Request<Body>) -> ApiResult<Response<Body>> {
     let key = require_key(&parts)?;
 
     let entire_body = join(body).await?;
-    let json: KeyReqRes = serde_json::from_slice(&entire_body)?;
+    let json: Key = serde_json::from_slice(&entire_body)?;
 
-    // Check to make sure that no injections into the glob are possible
-    // I don't think that this is a problem, but I want to be safe
-    if !json.key.chars().all(char::is_alphanumeric) {
-        return Err(ApiError::BadRequest);
-    }
+    let (user_id, _) = key.split_once('.').ok_or(ApiError::BadRequest)?;
+    let (_, prefix) = json.key.split_once('.').ok_or(ApiError::BadRequest)?;
+    let to_remove = [user_id, ".", prefix].concat();
 
-    let app_state = parts.data::<AppState>().unwrap();
-    let mut db = app_state.pool.get()?;
-    let tx = db.transaction()?;
+    block_in_place(|| {
+        let AppState { ref sessions, .. } = parts.data::<AppState>().unwrap();
 
-    block_in_place(move || {
-        let user_id: i64 = tx
-            .query_row(
-                "SELECT user_id FROM sessions WHERE key = ?",
-                params![key],
-                |row| row.get(0),
-            )
-            .optional()?
-            .ok_or(ApiError::Unauthorized)?;
+        sessions.get(key)?.ok_or(ApiError::Unauthorized)?;
 
-        tx.execute(
-            "DELETE FROM sessions WHERE
-            user_id = ? AND key GLOB ? || '*'",
-            params![user_id, json.key],
-        )?;
-
-        tx.commit()?;
+        for maybe_pair in sessions.scan_prefix(to_remove.as_bytes()) {
+            let (key, _) = maybe_pair?;
+            sessions.remove(key)?;
+        }
 
         Ok(Response::builder()
             .status(StatusCode::OK)

@@ -1,8 +1,11 @@
 mod common;
+mod error;
 mod file;
 mod user;
+mod wire;
 
-use common::{ApiError, AppState};
+use common::AppState;
+use error::ApiError;
 use hyper::{Body, Response, Server, StatusCode};
 use routerify::{Router, RouterService};
 use std::net::SocketAddr;
@@ -14,12 +17,11 @@ async fn handle_error(error: routerify::RouteError) -> Response<Body> {
         ApiError::Unauthorized => Response::builder().status(StatusCode::UNAUTHORIZED),
         ApiError::NotFound => Response::builder().status(StatusCode::NOT_FOUND),
         ApiError::Hyper(_)
-        | ApiError::R2D2(_)
-        | ApiError::Sqlite(_)
+        | ApiError::Sled(_)
         | ApiError::Argon(_)
         | ApiError::IO(_)
         | ApiError::Vips(_) => Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR),
-        ApiError::BadRequest | ApiError::Json(_) => {
+        ApiError::BadRequest | ApiError::Json(_) | ApiError::EmailTaken => {
             Response::builder().status(StatusCode::BAD_REQUEST)
         }
     }
@@ -41,6 +43,9 @@ async fn main() {
 
     let state = AppState::new();
     state.create_dirs().expect("Couldn't set up directories");
+
+    let removed = file::clean_files(&state).await.unwrap();
+    println!("Removed {} files", removed);
 
     let router = Router::builder()
         // Provide app state to routes

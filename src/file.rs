@@ -1,28 +1,27 @@
-use crate::common::{require_key, ApiError, ApiResult, AppState};
-use futures::TryStreamExt;
+use crate::{
+    common::{new_id, require_key, AppState, File},
+    error::{ApiError, ApiResult},
+    wire::Metadata,
+};
+use futures::{join, TryStreamExt};
 use hyper::{Body, Request, Response, StatusCode};
 use libvips::{ops, VipsImage};
-use rand::{thread_rng, Rng};
 use routerify::ext::RequestExt;
 use routerify::Router;
-use rusqlite::{params, OptionalExtension};
-use serde::Deserialize;
-use tokio::io::AsyncWriteExt;
-use tokio::task::block_in_place;
+use sled::Transactional;
+use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
+use tokio::{fs, io::AsyncWriteExt, task::block_in_place};
 
 const UPLOAD_METADATA: &'static str = "upload-metadata";
 const MEDIUM_HEIGHT: f64 = 400.;
 const SMALL_HEIGHT: f64 = 10.;
 
-#[derive(Deserialize)]
-struct Metadata<'a> {
-    last_modified: i64,
-    name: &'a str,
-    mime: &'a str,
-}
-
 async fn upload(req: Request<Body>) -> ApiResult<Response<Body>> {
     let (parts, mut body) = req.into_parts();
+
+    let key = require_key(&parts)?;
+    let (owner_id, _) = key.split_once('.').ok_or(ApiError::BadRequest)?;
 
     let metadata_header = parts
         .headers
@@ -32,37 +31,32 @@ async fn upload(req: Request<Body>) -> ApiResult<Response<Body>> {
         .map_err(|_| ApiError::BadRequest)?;
     let metadata: Metadata = serde_json::from_slice(&metadata_bytes)?;
 
-    let key = require_key(&parts)?;
+    let AppState {
+        ref users,
+        ref sessions,
+        ref files,
+        ref upload_path,
+        ref medium_path,
+        ref small_path,
+        ..
+    } = parts.data().unwrap();
 
-    let file_id_bytes: [u8; 16] = thread_rng().gen();
-    let file_id = base64::encode_config(&file_id_bytes, base64::URL_SAFE_NO_PAD);
+    // Don't start uploading until we have verified that the user may be able
+    // to save the file
+    sessions
+        .get(key.as_bytes())?
+        .ok_or(ApiError::Unauthorized)?;
 
-    let app_state = parts.data::<AppState>().unwrap();
-    let mut db = app_state.pool.get()?;
+    let file_id = new_id(16);
 
-    let user_id: i64 = block_in_place(|| {
-        db.query_row(
-            "SELECT user_id FROM sessions WHERE key = ?",
-            params![key],
-            |row| row.get(0),
-        )
-        .optional()?
-        .ok_or(ApiError::Unauthorized)
-    })?;
+    let upload_path = upload_path.join(&file_id);
+    let medium_path = medium_path.join(&file_id);
+    let small_path = small_path.join(&file_id);
 
-    let mut file_path = app_state.upload_path.clone();
-    file_path.push(&file_id);
-
-    let mut medium_path = app_state.medium_path.clone();
-    medium_path.push(&file_id);
-
-    let mut small_path = app_state.small_path.clone();
-    small_path.push(&file_id);
-
-    let mut buffer = tokio::fs::OpenOptions::new()
+    let mut buffer = fs::OpenOptions::new()
         .create_new(true)
         .write(true)
-        .open(&file_path)
+        .open(&upload_path)
         .await?;
 
     while let Some(chunk) = body.try_next().await? {
@@ -70,7 +64,7 @@ async fn upload(req: Request<Body>) -> ApiResult<Response<Body>> {
     }
 
     let result = block_in_place(|| {
-        let original = VipsImage::new_from_file(&file_path.to_str().unwrap())?;
+        let original = VipsImage::new_from_file(&upload_path.to_str().unwrap())?;
         let rotated = ops::autorot(&original).unwrap();
 
         let height = rotated.get_height();
@@ -84,37 +78,18 @@ async fn upload(req: Request<Body>) -> ApiResult<Response<Body>> {
         let small = ops::resize(&medium, small_factor)?;
         ops::webpsave(&small, small_path.to_str().unwrap())?;
 
-        let tx = db.transaction()?;
+        let file = File {
+            owner_id,
+            width,
+            height,
+            metadata,
+        };
 
-        // Double check that the user wasn't deleted during the upload
-        /* TODO
-        if None == tx.query_row(
-                "SELECT user_id FROM users WHERE user_id = ?",
-                params![key],
-                |_row| Ok(true),
-            ).optional()? {
-            return Err(ApiError::Unauthorized);
-        }
-        */
-
-        tx.execute(
-            "INSERT INTO files(
-                file_id, owner_id,
-                width, height,
-                last_modified, name, mime)
-            VALUES(?, ?, ?, ?, ?, ?, ?)",
-            params![
-                file_id,
-                user_id,
-                width,
-                height,
-                metadata.last_modified,
-                metadata.name,
-                metadata.mime
-            ],
-        )?;
-
-        tx.commit()?;
+        (users, files).transaction(|(users, files)| {
+            users.get(owner_id)?.ok_or(ApiError::Unauthorized)?;
+            files.insert(file_id.as_bytes(), bincode::serialize(&file).unwrap())?;
+            Ok(())
+        })?;
 
         Ok(Response::builder()
             .status(StatusCode::OK)
@@ -123,12 +98,42 @@ async fn upload(req: Request<Body>) -> ApiResult<Response<Body>> {
     });
 
     if result.is_err() {
-        tokio::fs::remove_file(&file_path).await?;
-        tokio::fs::remove_file(&medium_path).await?;
-        tokio::fs::remove_file(&small_path).await?;
+        let _ = join!(
+            fs::remove_file(&upload_path),
+            fs::remove_file(&medium_path),
+            fs::remove_file(&small_path)
+        );
     }
 
     result
+}
+
+async fn clean_path(app_state: &AppState, path: &Path) -> ApiResult<usize> {
+    let mut removed = 0;
+
+    let mut iter = fs::read_dir(path).await?;
+    while let Some(entry) = iter.next_entry().await? {
+        let path = entry.path();
+        if let Some(file_name) = path.file_name() {
+            if app_state.files.get(file_name.as_bytes())?.is_none() {
+                if fs::remove_file(path).await.is_ok() {
+                    removed += 1;
+                }
+            }
+        }
+    }
+
+    Ok(removed)
+}
+
+pub async fn clean_files(app_state: &AppState) -> ApiResult<usize> {
+    let (a, b, c) = join!(
+        clean_path(app_state, &app_state.upload_path),
+        clean_path(app_state, &app_state.medium_path),
+        clean_path(app_state, &app_state.small_path)
+    );
+
+    Ok(a? + b? + c?)
 }
 
 pub fn router() -> Router<Body, ApiError> {
