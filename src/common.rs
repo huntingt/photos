@@ -24,6 +24,7 @@ pub struct AppState {
     pub emails: sled::Tree,
     pub sessions: sled::Tree,
     pub files: sled::Tree,
+    pub file_names: sled::Tree,
 
     pub argon_config: argon2::Config<'static>,
     pub upload_path: PathBuf,
@@ -40,6 +41,7 @@ impl AppState {
             emails: db.open_tree(b"emails").unwrap(),
             sessions: db.open_tree(b"sessions").unwrap(),
             files: db.open_tree(b"files").unwrap(),
+            file_names: db.open_tree(b"file_names").unwrap(),
 
             argon_config: argon2::Config::default(),
 

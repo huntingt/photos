@@ -7,6 +7,7 @@ pub enum ApiError {
     NotFound,
     BadRequest,
     EmailTaken,
+    FileExists,
     Hyper(hyper::Error),
     Json(serde_json::Error),
     Sled(sled::Error),

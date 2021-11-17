@@ -1,7 +1,7 @@
 use crate::{
-    common::{new_id, require_key, AppState, File},
+    common::{join, new_id, require_key, AppState, File},
     error::{ApiError, ApiResult},
-    wire::Metadata,
+    wire::{FileList, ListParams, Metadata},
 };
 use futures::{join, TryStreamExt};
 use hyper::{Body, Request, Response, StatusCode};
@@ -35,6 +35,7 @@ async fn upload(req: Request<Body>) -> ApiResult<Response<Body>> {
         ref users,
         ref sessions,
         ref files,
+        ref file_names,
         ref upload_path,
         ref medium_path,
         ref small_path,
@@ -48,6 +49,7 @@ async fn upload(req: Request<Body>) -> ApiResult<Response<Body>> {
         .ok_or(ApiError::Unauthorized)?;
 
     let file_id = new_id(16);
+    let owner_file_name = [&owner_id, ".", metadata.name].concat();
 
     let upload_path = upload_path.join(&file_id);
     let medium_path = medium_path.join(&file_id);
@@ -85,10 +87,14 @@ async fn upload(req: Request<Body>) -> ApiResult<Response<Body>> {
             metadata,
         };
 
-        (users, files).transaction(|(users, files)| {
+        (users, files, file_names).transaction(|(users, files, file_names)| {
             users.get(owner_id)?.ok_or(ApiError::Unauthorized)?;
             files.insert(file_id.as_bytes(), bincode::serialize(&file).unwrap())?;
-            Ok(())
+
+            match file_names.insert(owner_file_name.as_bytes(), file_id.as_bytes())? {
+                Some(_) => Err(ApiError::FileExists.into()),
+                None => Ok(()),
+            }
         })?;
 
         Ok(Response::builder()
@@ -106,6 +112,58 @@ async fn upload(req: Request<Body>) -> ApiResult<Response<Body>> {
     }
 
     result
+}
+
+async fn list(req: Request<Body>) -> ApiResult<Response<Body>> {
+    let (parts, body) = req.into_parts();
+
+    let key = require_key(&parts)?;
+    let (owner_id, _) = key.split_once('.').ok_or(ApiError::BadRequest)?;
+
+    let entire_body = join(body).await?;
+    let json: ListParams = serde_json::from_slice(&entire_body)?;
+
+    block_in_place(|| {
+        let AppState {
+            ref sessions,
+            ref file_names,
+            ..
+        } = parts.data().unwrap();
+
+        sessions.get(key)?.ok_or(ApiError::Unauthorized)?;
+
+        let mut file_pairs = vec![];
+
+        let start = match json.start {
+            Some(start) => [owner_id, ".", start].concat(),
+            None => [&owner_id, "."].concat(),
+        };
+        let end = [owner_id.as_bytes(), &[255u8]].concat();
+
+        for maybe_pair in file_names.range(start.as_bytes()..&end) {
+            if let Some(length) = json.length {
+                if file_pairs.len() >= length {
+                    break;
+                }
+            }
+
+            let (key, file_id_bytes) = maybe_pair?;
+
+            let key_str = std::str::from_utf8(&key).unwrap();
+            let (_, file_name) = key_str.split_once('.').unwrap();
+
+            let file_id = std::str::from_utf8(&file_id_bytes).unwrap();
+
+            file_pairs.push((file_name.to_owned(), file_id.to_owned()));
+        }
+
+        let response = serde_json::to_string(&FileList { files: file_pairs })?;
+
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::from(response))
+            .unwrap())
+    })
 }
 
 async fn clean_path(app_state: &AppState, path: &Path) -> ApiResult<usize> {
@@ -137,5 +195,9 @@ pub async fn clean_files(app_state: &AppState) -> ApiResult<usize> {
 }
 
 pub fn router() -> Router<Body, ApiError> {
-    Router::builder().post("/upload", upload).build().unwrap()
+    Router::builder()
+        .post("/upload", upload)
+        .get("/list", list)
+        .build()
+        .unwrap()
 }

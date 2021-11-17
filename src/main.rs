@@ -21,7 +21,7 @@ async fn handle_error(error: routerify::RouteError) -> Response<Body> {
         | ApiError::Argon(_)
         | ApiError::IO(_)
         | ApiError::Vips(_) => Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR),
-        ApiError::BadRequest | ApiError::Json(_) | ApiError::EmailTaken => {
+        ApiError::BadRequest | ApiError::Json(_) | ApiError::EmailTaken | ApiError::FileExists => {
             Response::builder().status(StatusCode::BAD_REQUEST)
         }
     }
@@ -39,7 +39,7 @@ async fn shutdown_signal() {
 async fn main() {
     // Set up libvips for use
     let vips = libvips::VipsApp::new("vips", true).unwrap();
-    vips.concurrency_set(1);
+    vips.concurrency_set(2);
 
     let state = AppState::new();
     state.create_dirs().expect("Couldn't set up directories");

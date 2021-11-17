@@ -22,3 +22,14 @@ pub struct Metadata<'a> {
     pub name: &'a str,
     pub mime: &'a str,
 }
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ListParams<'a> {
+    pub start: Option<&'a str>,
+    pub length: Option<usize>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct FileList {
+    pub files: Vec<(String, String)>,
+}

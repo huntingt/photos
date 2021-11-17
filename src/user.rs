@@ -36,7 +36,7 @@ async fn create(req: Request<Body>) -> ApiResult<Response<Body>> {
             ref emails,
             ref argon_config,
             ..
-        } = parts.data::<AppState>().unwrap();
+        } = parts.data().unwrap();
 
         let user_id = new_id(8);
         let hash = hash_password(json.password.as_bytes(), argon_config)?;
@@ -75,7 +75,7 @@ async fn login(req: Request<Body>) -> ApiResult<Response<Body>> {
             ref emails,
             ref sessions,
             ..
-        } = parts.data::<AppState>().unwrap();
+        } = parts.data().unwrap();
 
         let key = new_id(32);
 
@@ -113,7 +113,7 @@ async fn sessions(req: Request<Body>) -> ApiResult<Response<Body>> {
     let (user_id, _) = key.split_once('.').ok_or(ApiError::BadRequest)?;
 
     block_in_place(|| {
-        let AppState { ref sessions, .. } = parts.data::<AppState>().unwrap();
+        let AppState { ref sessions, .. } = parts.data().unwrap();
 
         let mut prefixes = vec![];
 
@@ -149,7 +149,7 @@ async fn logout(req: Request<Body>) -> ApiResult<Response<Body>> {
     let to_remove = [user_id, ".", prefix].concat();
 
     block_in_place(|| {
-        let AppState { ref sessions, .. } = parts.data::<AppState>().unwrap();
+        let AppState { ref sessions, .. } = parts.data().unwrap();
 
         sessions.get(key)?.ok_or(ApiError::Unauthorized)?;
 
