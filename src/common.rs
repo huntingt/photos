@@ -1,6 +1,6 @@
 use crate::error::{ApiError, ApiResult};
 use crate::wire::Metadata;
-use hyper::Body;
+use hyper::{header, Body, Response, StatusCode};
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -85,4 +85,20 @@ pub fn require_key(parts: &hyper::http::request::Parts) -> ApiResult<&str> {
 pub fn new_id(size: usize) -> String {
     let bytes: Vec<u8> = (0..size).map(|_| thread_rng().gen()).collect();
     base64::encode_config(&bytes, base64::URL_SAFE_NO_PAD)
+}
+
+pub fn respond_ok<T: Serialize>(response: T) -> ApiResult<Response<Body>> {
+    let json = serde_json::to_string(&response)?;
+    Ok(Response::builder()
+        .header(header::CONTENT_TYPE, "application/json")
+        .status(StatusCode::OK)
+        .body(Body::from(json))
+        .unwrap())
+}
+
+pub fn respond_ok_empty() -> ApiResult<Response<Body>> {
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .body(Body::empty())
+        .unwrap())
 }

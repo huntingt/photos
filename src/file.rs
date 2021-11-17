@@ -1,17 +1,24 @@
 use crate::{
-    common::{join, new_id, require_key, AppState, File},
+    common::{join, new_id, require_key, respond_ok, AppState, File},
     error::{ApiError, ApiResult},
-    wire::{FileList, ListParams, Metadata},
+    wire::{FileList, ListParams, Metadata, UploadDetails},
 };
+use async_stream::try_stream;
+use bytes::{Bytes, BytesMut};
+use futures::stream::Stream;
 use futures::{join, TryStreamExt};
-use hyper::{Body, Request, Response, StatusCode};
+use hyper::{header, Body, Request, Response, StatusCode};
 use libvips::{ops, VipsImage};
 use routerify::ext::RequestExt;
 use routerify::Router;
 use sled::Transactional;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
-use tokio::{fs, io::AsyncWriteExt, task::block_in_place};
+use tokio::{
+    fs,
+    io::{self, AsyncReadExt, AsyncWriteExt},
+    task::block_in_place,
+};
 
 const UPLOAD_METADATA: &'static str = "upload-metadata";
 const MEDIUM_HEIGHT: f64 = 400.;
@@ -97,10 +104,7 @@ async fn upload(req: Request<Body>) -> ApiResult<Response<Body>> {
             }
         })?;
 
-        Ok(Response::builder()
-            .status(StatusCode::OK)
-            .body(Body::from(file_id))
-            .unwrap())
+        respond_ok(UploadDetails { file_id: &file_id })
     });
 
     if result.is_err() {
@@ -112,6 +116,16 @@ async fn upload(req: Request<Body>) -> ApiResult<Response<Body>> {
     }
 
     result
+}
+
+fn inclusive_range(tree: &sled::Tree, start: &[u8], mut end: Vec<u8>) -> sled::Iter {
+    while let Some(byte) = end.pop() {
+        if byte < u8::MAX {
+            end.push(byte + 1);
+            return tree.range(start..&end);
+        }
+    }
+    tree.range(start..)
 }
 
 async fn list(req: Request<Body>) -> ApiResult<Response<Body>> {
@@ -132,38 +146,96 @@ async fn list(req: Request<Body>) -> ApiResult<Response<Body>> {
 
         sessions.get(key)?.ok_or(ApiError::Unauthorized)?;
 
-        let mut file_pairs = vec![];
+        let start = [owner_id, ".", json.start.unwrap_or("")].concat();
+        let end = [owner_id, ".", json.end.unwrap_or("")].concat();
 
-        let start = match json.start {
-            Some(start) => [owner_id, ".", start].concat(),
-            None => [&owner_id, "."].concat(),
-        };
-        let end = [owner_id.as_bytes(), &[255u8]].concat();
+        let kv_pairs = inclusive_range(file_names, start.as_bytes(), end.into())
+            .skip(json.skip.unwrap_or(0))
+            .take(json.length.unwrap_or(usize::MAX))
+            .collect::<sled::Result<Vec<(sled::IVec, sled::IVec)>>>()?;
 
-        for maybe_pair in file_names.range(start.as_bytes()..&end) {
-            if let Some(length) = json.length {
-                if file_pairs.len() >= length {
-                    break;
-                }
+        let file_pairs = kv_pairs
+            .iter()
+            .map(|(key, file_id)| {
+                let (_, file_name) = std::str::from_utf8(&key).unwrap().split_once('.').unwrap();
+
+                let file_id = std::str::from_utf8(&file_id).unwrap();
+
+                (file_name, file_id)
+            })
+            .collect();
+
+        respond_ok(FileList { files: file_pairs })
+    })
+}
+
+fn file_stream(mut file: fs::File, chunk_size: usize) -> impl Stream<Item = io::Result<Bytes>> {
+    try_stream! {
+        loop {
+            let mut buffer = BytesMut::with_capacity(chunk_size);
+            file.read_buf(&mut buffer).await?;
+
+            if buffer.is_empty() {
+                break;
             }
 
-            let (key, file_id_bytes) = maybe_pair?;
-
-            let key_str = std::str::from_utf8(&key).unwrap();
-            let (_, file_name) = key_str.split_once('.').unwrap();
-
-            let file_id = std::str::from_utf8(&file_id_bytes).unwrap();
-
-            file_pairs.push((file_name.to_owned(), file_id.to_owned()));
+            yield buffer.into();
         }
+    }
+}
 
-        let response = serde_json::to_string(&FileList { files: file_pairs })?;
+async fn serve(req: Request<Body>) -> ApiResult<Response<Body>> {
+    let (parts, _) = req.into_parts();
 
-        Ok(Response::builder()
-            .status(StatusCode::OK)
-            .body(Body::from(response))
-            .unwrap())
-    })
+    let key = require_key(&parts)?;
+    let (user_id, _) = key.split_once('.').ok_or(ApiError::BadRequest)?;
+
+    let quality = parts.param("quality").unwrap();
+    let file_id = parts.param("fileId").unwrap();
+
+    let AppState {
+        ref sessions,
+        ref files,
+        ref upload_path,
+        ref medium_path,
+        ref small_path,
+        ..
+    } = parts.data().unwrap();
+
+    sessions
+        .get(key.as_bytes())?
+        .ok_or(ApiError::Unauthorized)?;
+
+    let file_bytes = files.get(file_id.as_bytes())?.ok_or(ApiError::NotFound)?;
+    let file: File = bincode::deserialize(&file_bytes).unwrap();
+
+    if file.owner_id != user_id {
+        return Err(ApiError::NotFound);
+    }
+
+    let (path, mime) = match quality.as_str() {
+        "large" => (upload_path.join(file_id), file.metadata.mime),
+        "medium" => (medium_path.join(file_id), "image/webp"),
+        "small" => (small_path.join(file_id), "image/webp"),
+        _ => return Err(ApiError::BadRequest),
+    };
+
+    let stream = file_stream(fs::File::open(path).await?, 1024 * 8);
+
+    Ok(Response::builder()
+        .header(header::CONTENT_TYPE, mime)
+        .status(StatusCode::OK)
+        .body(Body::wrap_stream(stream))
+        .unwrap())
+}
+
+pub fn router() -> Router<Body, ApiError> {
+    Router::builder()
+        .post("/upload", upload)
+        .get("/list", list)
+        .get("/serve/:quality/:fileId", serve)
+        .build()
+        .unwrap()
 }
 
 async fn clean_path(app_state: &AppState, path: &Path) -> ApiResult<usize> {
@@ -192,12 +264,4 @@ pub async fn clean_files(app_state: &AppState) -> ApiResult<usize> {
     );
 
     Ok(a? + b? + c?)
-}
-
-pub fn router() -> Router<Body, ApiError> {
-    Router::builder()
-        .post("/upload", upload)
-        .get("/list", list)
-        .build()
-        .unwrap()
 }

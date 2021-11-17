@@ -11,6 +11,9 @@ routerify = "*"
 querystring = "*"
 futures = "*"
 
+bytes = "*"
+async-stream = "*"
+
 sled = "*"
 bincode = "*"
 

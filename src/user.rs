@@ -1,14 +1,17 @@
 use crate::{
-    common::{join, new_id, require_key, AppState, User},
+    common::{join, new_id, require_key, respond_ok, respond_ok_empty, AppState, User},
     error::{ApiError, ApiResult},
     wire::{Key, SessionsList, UserDetails},
 };
-use hyper::{Body, Request, Response, StatusCode};
+use hyper::{Body, Request, Response};
 use rand::{thread_rng, Rng};
 use routerify::ext::RequestExt;
 use routerify::Router;
 use sled::Transactional;
 use tokio::task::block_in_place;
+
+const USER_ID_BYTES: usize = 8;
+const SESSION_KEY_BYTES: usize = 32;
 
 fn hash_password(password: &[u8], config: &argon2::Config) -> ApiResult<String> {
     let salt: [u8; 32] = thread_rng().gen();
@@ -21,6 +24,7 @@ fn verify_password(hash: &str, password: &str) -> ApiResult<()> {
     if !argon2::verify_encoded(hash, password.as_bytes())? {
         return Err(ApiError::Unauthorized.into());
     }
+
     Ok(())
 }
 
@@ -38,7 +42,7 @@ async fn create(req: Request<Body>) -> ApiResult<Response<Body>> {
             ..
         } = parts.data().unwrap();
 
-        let user_id = new_id(8);
+        let user_id = new_id(USER_ID_BYTES);
         let hash = hash_password(json.password.as_bytes(), argon_config)?;
 
         let user = User {
@@ -56,10 +60,7 @@ async fn create(req: Request<Body>) -> ApiResult<Response<Body>> {
             Ok(())
         })?;
 
-        Ok(Response::builder()
-            .status(StatusCode::OK)
-            .body(Body::empty())
-            .unwrap())
+        respond_ok_empty()
     })
 }
 
@@ -77,7 +78,7 @@ async fn login(req: Request<Body>) -> ApiResult<Response<Body>> {
             ..
         } = parts.data().unwrap();
 
-        let key = new_id(32);
+        let key = new_id(SESSION_KEY_BYTES);
 
         let extended_key = (users, emails, sessions).transaction(|(users, emails, sessions)| {
             let user_id = emails.get(json.email)?.ok_or(ApiError::Unauthorized)?;
@@ -94,14 +95,9 @@ async fn login(req: Request<Body>) -> ApiResult<Response<Body>> {
             Ok(extended_key)
         })?;
 
-        let response = serde_json::to_string(&Key {
+        respond_ok(Key {
             key: std::str::from_utf8(&extended_key).unwrap(),
-        })?;
-
-        Ok(Response::builder()
-            .status(StatusCode::OK)
-            .body(Body::from(response))
-            .unwrap())
+        })
     })
 }
 
@@ -125,14 +121,9 @@ async fn sessions(req: Request<Body>) -> ApiResult<Response<Body>> {
             prefixes.push(string);
         }
 
-        let response = serde_json::to_string(&SessionsList {
+        respond_ok(SessionsList {
             key_prefixes: prefixes,
-        })?;
-
-        Ok(Response::builder()
-            .status(StatusCode::OK)
-            .body(Body::from(response))
-            .unwrap())
+        })
     })
 }
 
@@ -158,10 +149,7 @@ async fn logout(req: Request<Body>) -> ApiResult<Response<Body>> {
             sessions.remove(key)?;
         }
 
-        Ok(Response::builder()
-            .status(StatusCode::OK)
-            .body(Body::empty())
-            .unwrap())
+        respond_ok_empty()
     })
 }
 

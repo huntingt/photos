@@ -26,10 +26,17 @@ pub struct Metadata<'a> {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ListParams<'a> {
     pub start: Option<&'a str>,
+    pub end: Option<&'a str>,
+    pub skip: Option<usize>,
     pub length: Option<usize>,
 }
 
+#[derive(Serialize, Debug)]
+pub struct FileList<'a> {
+    pub files: Vec<(&'a str, &'a str)>,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
-pub struct FileList {
-    pub files: Vec<(String, String)>,
+pub struct UploadDetails<'a> {
+    pub file_id: &'a str,
 }
