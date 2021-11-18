@@ -1,5 +1,5 @@
 use crate::error::{ApiError, ApiResult};
-use crate::wire::Metadata;
+use crate::wire::{AlbumDescription, Metadata};
 use hyper::{header, Body, Response, StatusCode};
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
@@ -19,12 +19,26 @@ pub struct File<'a> {
     pub metadata: Metadata<'a>,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Album<'a> {
+    #[serde(rename = "owner")]
+    pub owner_id: &'a str,
+    pub description: AlbumDescription<'a>,
+    pub fragment_head: u64,
+    pub length: usize,
+    pub last_update: i64,
+    pub date_range: Option<(i64, i64)>,
+}
+
 pub struct AppState {
     pub users: sled::Tree,
     pub emails: sled::Tree,
     pub sessions: sled::Tree,
     pub files: sled::Tree,
     pub file_names: sled::Tree,
+    pub albums: sled::Tree,
+    pub inclusions: sled::Tree,
+    pub fragments: sled::Tree,
 
     pub argon_config: argon2::Config<'static>,
     pub upload_path: PathBuf,
@@ -42,6 +56,9 @@ impl AppState {
             sessions: db.open_tree(b"sessions").unwrap(),
             files: db.open_tree(b"files").unwrap(),
             file_names: db.open_tree(b"file_names").unwrap(),
+            albums: db.open_tree(b"albums").unwrap(),
+            inclusions: db.open_tree(b"inclusions").unwrap(),
+            fragments: db.open_tree(b"fragments").unwrap(),
 
             argon_config: argon2::Config::default(),
 
@@ -80,6 +97,13 @@ pub fn require_key(parts: &hyper::http::request::Parts) -> ApiResult<&str> {
         .find(|(k, _)| k == &"key")
         .ok_or(ApiError::Unauthorized)?;
     Ok(key)
+}
+
+pub fn auth_album(parts: &hyper::http::request::Parts) -> Option<&str> {
+    let query_str = parts.uri.query()?;
+    let queries = querystring::querify(query_str);
+    let (_, album) = queries.iter().find(|(k, _)| k == &"album")?;
+    Some(album)
 }
 
 pub fn new_id(size: usize) -> String {

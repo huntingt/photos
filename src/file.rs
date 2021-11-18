@@ -1,5 +1,5 @@
 use crate::{
-    common::{join, new_id, require_key, respond_ok, AppState, File},
+    common::{auth_album, join, new_id, require_key, respond_ok, Album, AppState, File},
     error::{ApiError, ApiResult},
     wire::{FileList, ListParams, Metadata, UploadDetails},
 };
@@ -196,6 +196,7 @@ async fn serve(req: Request<Body>) -> ApiResult<Response<Body>> {
     let AppState {
         ref sessions,
         ref files,
+        ref albums,
         ref upload_path,
         ref medium_path,
         ref small_path,
@@ -209,8 +210,22 @@ async fn serve(req: Request<Body>) -> ApiResult<Response<Body>> {
     let file_bytes = files.get(file_id.as_bytes())?.ok_or(ApiError::NotFound)?;
     let file: File = bincode::deserialize(&file_bytes).unwrap();
 
-    if file.owner_id != user_id {
-        return Err(ApiError::NotFound);
+    match auth_album(&parts) {
+        None => {
+            if file.owner_id != user_id {
+                return Err(ApiError::NotFound);
+            }
+        }
+        Some(album_id) => {
+            let album_bytes = albums
+                .get(album_id.as_bytes())?
+                .ok_or(ApiError::Unauthorized)?;
+            let album: Album = bincode::deserialize(&album_bytes).unwrap();
+
+            if album.owner_id != user_id {
+                return Err(ApiError::Unauthorized);
+            }
+        }
     }
 
     let (path, mime) = match quality.as_str() {

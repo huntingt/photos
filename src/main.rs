@@ -1,4 +1,6 @@
+mod album;
 mod common;
+mod engine;
 mod error;
 mod file;
 mod user;
@@ -53,6 +55,7 @@ async fn main() {
         // Routes
         .scope("/user", user::router())
         .scope("/file", file::router())
+        .scope("/album", album::router())
         // Not found for invalid paths
         .any(|_| async { Err(ApiError::NotFound) })
         .err_handler(handle_error)

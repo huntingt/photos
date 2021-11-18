@@ -16,9 +16,9 @@ pub struct SessionsList {
     pub key_prefixes: Vec<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Metadata<'a> {
-    pub last_modified: u64,
+    pub last_modified: i64,
     pub name: &'a str,
     pub mime: &'a str,
 }
@@ -39,4 +39,20 @@ pub struct FileList<'a> {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct UploadDetails<'a> {
     pub file_id: &'a str,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AlbumDescription<'a> {
+    pub name: &'a str,
+    pub time_zone: chrono_tz::Tz,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct NewAlbumDetails<'a> {
+    pub album_id: &'a str,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct FileIdList {
+    pub file_ids: Vec<String>,
 }

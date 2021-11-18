@@ -25,3 +25,6 @@ rust-argon2 = "*"
 base64 = "*"
 
 libvips = "*"
+
+chrono = "*"
+chrono-tz = { version = "*", features = ["serde"] }
