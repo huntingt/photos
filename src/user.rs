@@ -1,13 +1,14 @@
 use crate::{
     common::{join, new_id, require_key, respond_ok, respond_ok_empty, AppState, User},
     error::{ApiError, ApiResult},
-    wire::{Key, SessionsList, UserDetails},
+    wire::{Key, SessionList, UserDetails},
 };
 use hyper::{Body, Request, Response};
 use rand::{thread_rng, Rng};
 use routerify::ext::RequestExt;
 use routerify::Router;
 use sled::Transactional;
+use std::borrow::Cow;
 use tokio::task::block_in_place;
 
 const USER_ID_BYTES: usize = 8;
@@ -46,12 +47,12 @@ async fn create(req: Request<Body>) -> ApiResult<Response<Body>> {
         let hash = hash_password(json.password.as_bytes(), argon_config)?;
 
         let user = User {
-            email: json.email,
+            email: &json.email,
             password: &hash,
         };
 
         (users, emails).transaction(|(users, emails)| {
-            if emails.insert(json.email, user_id.as_bytes())?.is_some() {
+            if emails.insert(&*json.email, user_id.as_bytes())?.is_some() {
                 return Err(ApiError::EmailTaken.into());
             }
 
@@ -81,7 +82,7 @@ async fn login(req: Request<Body>) -> ApiResult<Response<Body>> {
         let key = new_id(SESSION_KEY_BYTES);
 
         let extended_key = (users, emails, sessions).transaction(|(users, emails, sessions)| {
-            let user_id = emails.get(json.email)?.ok_or(ApiError::Unauthorized)?;
+            let user_id = emails.get(&*json.email)?.ok_or(ApiError::Unauthorized)?;
 
             let user_bytes = users.get(&user_id)?.unwrap();
             let user: User = bincode::deserialize(&user_bytes).unwrap();
@@ -96,7 +97,7 @@ async fn login(req: Request<Body>) -> ApiResult<Response<Body>> {
         })?;
 
         respond_ok(Key {
-            key: std::str::from_utf8(&extended_key).unwrap(),
+            key: Cow::from(std::str::from_utf8(&extended_key).unwrap()),
         })
     })
 }
@@ -118,10 +119,10 @@ async fn sessions(req: Request<Body>) -> ApiResult<Response<Body>> {
         for maybe_pair in sessions.scan_prefix(&user_id) {
             let (key, _) = maybe_pair?;
             let string = String::from(std::str::from_utf8(key.as_ref()).unwrap());
-            prefixes.push(string);
+            prefixes.push(Cow::from(string));
         }
 
-        respond_ok(SessionsList {
+        respond_ok(SessionList {
             key_prefixes: prefixes,
         })
     })

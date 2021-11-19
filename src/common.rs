@@ -1,5 +1,6 @@
 use crate::error::{ApiError, ApiResult};
-use crate::wire::{AlbumDescription, Metadata};
+use crate::wire::FileMetadata;
+use hyper::http::request::Parts;
 use hyper::{header, Body, Response, StatusCode};
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
@@ -12,22 +13,14 @@ pub struct User<'a> {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct File<'a> {
+pub struct File<'a, 'b, 'c> {
     pub owner_id: &'a str,
+
     pub width: i32,
     pub height: i32,
-    pub metadata: Metadata<'a>,
-}
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Album<'a> {
-    #[serde(rename = "owner")]
-    pub owner_id: &'a str,
-    pub description: AlbumDescription<'a>,
-    pub fragment_head: u64,
-    pub length: usize,
-    pub last_update: i64,
-    pub date_range: Option<(i64, i64)>,
+    #[serde(borrow)]
+    pub metadata: FileMetadata<'b, 'c>,
 }
 
 pub struct AppState {
@@ -89,7 +82,7 @@ pub async fn join(body: Body) -> ApiResult<Vec<u8>> {
     Ok(data)
 }
 
-pub fn require_key(parts: &hyper::http::request::Parts) -> ApiResult<&str> {
+pub fn require_key(parts: &Parts) -> ApiResult<&str> {
     let query_str = parts.uri.query().ok_or(ApiError::Unauthorized)?;
     let queries = querystring::querify(query_str);
     let (_, key) = queries
@@ -99,7 +92,7 @@ pub fn require_key(parts: &hyper::http::request::Parts) -> ApiResult<&str> {
     Ok(key)
 }
 
-pub fn auth_album(parts: &hyper::http::request::Parts) -> Option<&str> {
+pub fn auth_album(parts: &Parts) -> Option<&str> {
     let query_str = parts.uri.query()?;
     let queries = querystring::querify(query_str);
     let (_, album) = queries.iter().find(|(k, _)| k == &"album")?;

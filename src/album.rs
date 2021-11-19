@@ -1,15 +1,14 @@
 use crate::{
-    common::{
-        join, new_id, require_key, respond_ok, respond_ok_empty, Album, AppState, File, User,
-    },
+    common::{join, new_id, require_key, respond_ok, respond_ok_empty, AppState, File, User},
     engine::Engine,
     error::{ApiError, ApiResult},
-    wire::{AlbumDescription, FileIdList, NewAlbumDetails},
+    wire::{Album, AlbumSettings, IdList, NewResource},
 };
 use chrono::offset::Utc;
 use hyper::{header, Body, Request, Response, StatusCode};
 use routerify::{ext::RequestExt, Router};
 use sled::Transactional;
+use std::borrow::Cow;
 use tokio::task::block_in_place;
 
 const ALBUM_ID_BYTES: usize = 16;
@@ -21,7 +20,7 @@ async fn create(req: Request<Body>) -> ApiResult<Response<Body>> {
     let (user_id, _) = key.split_once('.').ok_or(ApiError::BadRequest)?;
 
     let entire_body = join(body).await?;
-    let json: AlbumDescription = serde_json::from_slice(&entire_body)?;
+    let json: AlbumSettings = serde_json::from_slice(&entire_body)?;
 
     block_in_place(|| {
         let AppState {
@@ -34,7 +33,7 @@ async fn create(req: Request<Body>) -> ApiResult<Response<Body>> {
 
         let album_id = new_id(ALBUM_ID_BYTES);
         let album = Album {
-            owner_id: &user_id,
+            owner_id: Cow::from(user_id),
             description: json,
             fragment_head: 0,
             length: 0,
@@ -58,8 +57,8 @@ async fn create(req: Request<Body>) -> ApiResult<Response<Body>> {
             },
         )?;
 
-        respond_ok(NewAlbumDetails {
-            album_id: &album_id,
+        respond_ok(NewResource {
+            id: Cow::from(album_id),
         })
     })
 }
@@ -71,7 +70,7 @@ async fn add_remove(req: Request<Body>, add: bool) -> ApiResult<Response<Body>> 
     let (user_id, _) = key.split_once('.').ok_or(ApiError::BadRequest)?;
 
     let entire_body = join(body).await?;
-    let json: FileIdList = serde_json::from_slice(&entire_body)?;
+    let json: IdList = serde_json::from_slice(&entire_body)?;
 
     block_in_place(|| {
         let AppState {
@@ -99,9 +98,9 @@ async fn add_remove(req: Request<Body>, add: bool) -> ApiResult<Response<Body>> 
                 }
 
                 let mut e = Engine::new(&album_id, &mut album, fragments)?;
-                for file_id in &json.file_ids {
+                for file_id in &json.ids {
                     if add {
-                        let file_bytes = files.get(&file_id)?.ok_or(ApiError::Unauthorized)?;
+                        let file_bytes = files.get(&**file_id)?.ok_or(ApiError::Unauthorized)?;
                         let file: File = bincode::deserialize(&file_bytes).unwrap();
 
                         if file.owner_id != user_id {
@@ -112,7 +111,7 @@ async fn add_remove(req: Request<Body>, add: bool) -> ApiResult<Response<Body>> 
                         inclusions.insert(inclusion.as_bytes(), b"")?;
 
                         e.add(file_id, &file)?;
-                    } else if let Some(file_bytes) = files.get(&file_id)? {
+                    } else if let Some(file_bytes) = files.get(&**file_id)? {
                         let file: File = bincode::deserialize(&file_bytes).unwrap();
 
                         let inclusion = [file_id, ":", album_id].concat();
@@ -178,7 +177,7 @@ async fn serve(req: Request<Body>) -> ApiResult<Response<Body>> {
         } else {
             let user_bytes = users.get(user_id)?.ok_or(ApiError::NotFound)?;
             let user: User = bincode::deserialize(&user_bytes).unwrap();
-            album.owner_id = user.email;
+            album.owner_id = Cow::from(user.email);
 
             respond_ok(album)
         }

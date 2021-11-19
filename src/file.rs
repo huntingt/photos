@@ -1,7 +1,7 @@
 use crate::{
-    common::{auth_album, join, new_id, require_key, respond_ok, Album, AppState, File},
+    common::{auth_album, join, new_id, require_key, respond_ok, AppState, File},
     error::{ApiError, ApiResult},
-    wire::{FileList, ListParams, Metadata, UploadDetails},
+    wire::{Album, FileList, FileMetadata, ListRequest, NewResource},
 };
 use async_stream::try_stream;
 use bytes::{Bytes, BytesMut};
@@ -12,6 +12,7 @@ use libvips::{ops, VipsImage};
 use routerify::ext::RequestExt;
 use routerify::Router;
 use sled::Transactional;
+use std::borrow::Cow;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use tokio::{
@@ -36,7 +37,7 @@ async fn upload(req: Request<Body>) -> ApiResult<Response<Body>> {
         .ok_or(ApiError::BadRequest)?;
     let metadata_bytes = base64::decode_config(metadata_header, base64::URL_SAFE)
         .map_err(|_| ApiError::BadRequest)?;
-    let metadata: Metadata = serde_json::from_slice(&metadata_bytes)?;
+    let metadata: FileMetadata = serde_json::from_slice(&metadata_bytes)?;
 
     let AppState {
         ref users,
@@ -56,7 +57,7 @@ async fn upload(req: Request<Body>) -> ApiResult<Response<Body>> {
         .ok_or(ApiError::Unauthorized)?;
 
     let file_id = new_id(16);
-    let owner_file_name = [&owner_id, ".", metadata.name].concat();
+    let owner_file_name = [&owner_id, ".", &metadata.name].concat();
 
     let upload_path = upload_path.join(&file_id);
     let medium_path = medium_path.join(&file_id);
@@ -104,7 +105,9 @@ async fn upload(req: Request<Body>) -> ApiResult<Response<Body>> {
             }
         })?;
 
-        respond_ok(UploadDetails { file_id: &file_id })
+        respond_ok(NewResource {
+            id: Cow::from(file_id),
+        })
     });
 
     if result.is_err() {
@@ -118,16 +121,6 @@ async fn upload(req: Request<Body>) -> ApiResult<Response<Body>> {
     result
 }
 
-fn inclusive_range(tree: &sled::Tree, start: &[u8], mut end: Vec<u8>) -> sled::Iter {
-    while let Some(byte) = end.pop() {
-        if byte < u8::MAX {
-            end.push(byte + 1);
-            return tree.range(start..&end);
-        }
-    }
-    tree.range(start..)
-}
-
 async fn list(req: Request<Body>) -> ApiResult<Response<Body>> {
     let (parts, body) = req.into_parts();
 
@@ -135,7 +128,7 @@ async fn list(req: Request<Body>) -> ApiResult<Response<Body>> {
     let (owner_id, _) = key.split_once('.').ok_or(ApiError::BadRequest)?;
 
     let entire_body = join(body).await?;
-    let json: ListParams = serde_json::from_slice(&entire_body)?;
+    let json: ListRequest = serde_json::from_slice(&entire_body)?;
 
     block_in_place(|| {
         let AppState {
@@ -146,10 +139,9 @@ async fn list(req: Request<Body>) -> ApiResult<Response<Body>> {
 
         sessions.get(key)?.ok_or(ApiError::Unauthorized)?;
 
-        let start = [owner_id, ".", json.start.unwrap_or("")].concat();
-        let end = [owner_id, ".", json.end.unwrap_or("")].concat();
-
-        let kv_pairs = inclusive_range(file_names, start.as_bytes(), end.into())
+        let prefix = [owner_id, ".", &json.prefix.unwrap_or(Cow::from(""))].concat();
+        let kv_pairs = file_names
+            .scan_prefix(prefix.as_bytes())
             .skip(json.skip.unwrap_or(0))
             .take(json.length.unwrap_or(usize::MAX))
             .collect::<sled::Result<Vec<(sled::IVec, sled::IVec)>>>()?;
@@ -158,10 +150,8 @@ async fn list(req: Request<Body>) -> ApiResult<Response<Body>> {
             .iter()
             .map(|(key, file_id)| {
                 let (_, file_name) = std::str::from_utf8(&key).unwrap().split_once('.').unwrap();
-
                 let file_id = std::str::from_utf8(&file_id).unwrap();
-
-                (file_name, file_id)
+                (Cow::from(file_name), Cow::from(file_id))
             })
             .collect();
 
@@ -228,8 +218,8 @@ async fn serve(req: Request<Body>) -> ApiResult<Response<Body>> {
         }
     }
 
-    let (path, mime) = match quality.as_str() {
-        "large" => (upload_path.join(file_id), file.metadata.mime),
+    let (path, mime): (_, &str) = match quality.as_str() {
+        "large" => (upload_path.join(file_id), &file.metadata.mime),
         "medium" => (medium_path.join(file_id), "image/webp"),
         "small" => (small_path.join(file_id), "image/webp"),
         _ => return Err(ApiError::BadRequest),
