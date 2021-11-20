@@ -2,7 +2,6 @@ use crate::{
     common::{join, new_id, require_key, respond_ok, respond_ok_empty, AppState, File, User},
     engine::Engine,
     error::{ApiError, ApiResult},
-    wire::{Album, AlbumSettings, IdList, NewResource},
 };
 use chrono::offset::Utc;
 use hyper::{header, Body, Request, Response, StatusCode};
@@ -10,6 +9,7 @@ use routerify::{ext::RequestExt, Router};
 use sled::Transactional;
 use std::borrow::Cow;
 use tokio::task::block_in_place;
+use wire::{Album, AlbumSettings, IdList, NewResource};
 
 const ALBUM_ID_BYTES: usize = 16;
 

@@ -12,7 +12,6 @@
 
 use crate::common::File;
 use crate::error::ApiError;
-use crate::wire::Album;
 use chrono::{offset::Utc, TimeZone};
 use serde::{
     de::{Deserializer, SeqAccess, Visitor},
@@ -25,6 +24,7 @@ use serde::{
 use sled::transaction::{ConflictableTransactionResult, TransactionalTree};
 use std::collections::BTreeMap;
 use std::fmt;
+use wire::Album;
 
 #[derive(PartialEq, PartialOrd, Eq, Ord, Debug)]
 struct FileKey {

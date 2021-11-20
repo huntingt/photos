@@ -1,0 +1,31 @@
+[package]
+name = "client"
+version = "0.1.0"
+authors = ["Parker Huntington <huntingt@mit.edu>"]
+edition = "2018"
+
+[dependencies]
+env = "*"
+dotenv = "*"
+
+reqwest = { version = "*", features = ["json", "stream"] }
+serde = { version = "*", features = ["derive"] }
+tokio = { version = "*", features = ["full"] }
+
+mime_guess = "*"
+serde_json = "*"
+
+base64 = "*"
+
+async-stream = "*"
+futures = "*"
+bytes = "*"
+async-trait = "*"
+
+wire = { path = "../wire" }
+sled = "*"
+clap = "*"
+rpassword = "*"
+indicatif = "*"
+
+console = "*"

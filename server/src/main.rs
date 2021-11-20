@@ -4,7 +4,6 @@ mod engine;
 mod error;
 mod file;
 mod user;
-mod wire;
 
 use common::AppState;
 use error::ApiError;

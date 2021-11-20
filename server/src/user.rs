@@ -1,7 +1,6 @@
 use crate::{
     common::{join, new_id, require_key, respond_ok, respond_ok_empty, AppState, User},
     error::{ApiError, ApiResult},
-    wire::{Key, SessionList, UserDetails},
 };
 use hyper::{Body, Request, Response};
 use rand::{thread_rng, Rng};
@@ -10,6 +9,7 @@ use routerify::Router;
 use sled::Transactional;
 use std::borrow::Cow;
 use tokio::task::block_in_place;
+use wire::{Key, SessionList, UserDetails};
 
 const USER_ID_BYTES: usize = 8;
 const SESSION_KEY_BYTES: usize = 32;
@@ -118,7 +118,7 @@ async fn sessions(req: Request<Body>) -> ApiResult<Response<Body>> {
 
         for maybe_pair in sessions.scan_prefix(&user_id) {
             let (key, _) = maybe_pair?;
-            let string = String::from(std::str::from_utf8(key.as_ref()).unwrap());
+            let string = String::from(&std::str::from_utf8(key.as_ref()).unwrap()[..20]);
             prefixes.push(Cow::from(string));
         }
 

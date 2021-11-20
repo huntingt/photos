@@ -1,0 +1,32 @@
+[package]
+name = "server"
+version = "0.1.0"
+authors = ["Parker Huntington <huntingt@mit.edu>"]
+edition = "2018"
+
+[dependencies]
+hyper = "*"
+tokio = { version = "*", features = ["full"] }
+routerify = "*"
+querystring = "*"
+futures = "*"
+
+bytes = "*"
+async-stream = "*"
+
+sled = "*"
+bincode = "*"
+
+serde = { version = "*", features = ["derive"] }
+serde_json = "*"
+
+rand = "*"
+rust-argon2 = "*"
+base64 = "*"
+
+libvips = "*"
+
+chrono = "*"
+chrono-tz = { version = "*", features = ["serde"] }
+
+wire = { path = "../wire" }

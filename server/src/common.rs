@@ -1,10 +1,10 @@
 use crate::error::{ApiError, ApiResult};
-use crate::wire::FileMetadata;
 use hyper::http::request::Parts;
 use hyper::{header, Body, Response, StatusCode};
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use wire::FileMetadata;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct User<'a> {
@@ -37,6 +37,7 @@ pub struct AppState {
     pub upload_path: PathBuf,
     pub medium_path: PathBuf,
     pub small_path: PathBuf,
+    pub temp_path: PathBuf,
 }
 
 impl AppState {
@@ -58,6 +59,7 @@ impl AppState {
             upload_path: PathBuf::from("data/uploads"),
             medium_path: PathBuf::from("data/medium"),
             small_path: PathBuf::from("data/small"),
+            temp_path: PathBuf::from("data/temp"),
         }
     }
 
@@ -65,6 +67,7 @@ impl AppState {
         std::fs::create_dir_all(&self.upload_path)?;
         std::fs::create_dir_all(&self.medium_path)?;
         std::fs::create_dir_all(&self.small_path)?;
+        std::fs::create_dir_all(&self.temp_path)?;
         Ok(())
     }
 }

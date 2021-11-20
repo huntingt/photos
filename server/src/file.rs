@@ -1,7 +1,6 @@
 use crate::{
     common::{auth_album, join, new_id, require_key, respond_ok, AppState, File},
     error::{ApiError, ApiResult},
-    wire::{Album, FileList, FileMetadata, ListRequest, NewResource},
 };
 use async_stream::try_stream;
 use bytes::{Bytes, BytesMut};
@@ -20,6 +19,7 @@ use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt},
     task::block_in_place,
 };
+use wire::{Album, FileList, FileMetadata, ListRequest, NewResource};
 
 const UPLOAD_METADATA: &'static str = "upload-metadata";
 const MEDIUM_HEIGHT: f64 = 400.;
@@ -47,6 +47,7 @@ async fn upload(req: Request<Body>) -> ApiResult<Response<Body>> {
         ref upload_path,
         ref medium_path,
         ref small_path,
+        ref temp_path,
         ..
     } = parts.data().unwrap();
 
@@ -63,6 +64,9 @@ async fn upload(req: Request<Body>) -> ApiResult<Response<Body>> {
     let medium_path = medium_path.join(&file_id);
     let small_path = small_path.join(&file_id);
 
+    let temp_id = [&file_id, ".png"].concat();
+    let temp_path = temp_path.join(&temp_id);
+
     let mut buffer = fs::OpenOptions::new()
         .create_new(true)
         .write(true)
@@ -74,7 +78,19 @@ async fn upload(req: Request<Body>) -> ApiResult<Response<Body>> {
     }
 
     let result = block_in_place(|| {
-        let original = VipsImage::new_from_file(&upload_path.to_str().unwrap())?;
+        let original = if metadata.mime.starts_with("video/") {
+            std::process::Command::new("ffmpeg")
+                .arg("-i")
+                .arg(upload_path.as_os_str())
+                .arg("-vframes")
+                .arg("1")
+                .arg(&temp_path.to_str().unwrap())
+                .output()?;
+            VipsImage::new_from_file(&temp_path.to_str().unwrap())?
+        } else {
+            VipsImage::new_from_file(&upload_path.to_str().unwrap())?
+        };
+
         let rotated = ops::autorot(&original).unwrap();
 
         let height = rotated.get_height();
@@ -114,8 +130,11 @@ async fn upload(req: Request<Body>) -> ApiResult<Response<Body>> {
         let _ = join!(
             fs::remove_file(&upload_path),
             fs::remove_file(&medium_path),
-            fs::remove_file(&small_path)
+            fs::remove_file(&small_path),
+            fs::remove_file(&temp_path)
         );
+    } else {
+        let _ = fs::remove_file(&temp_path).await;
     }
 
     result
