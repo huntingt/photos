@@ -152,19 +152,20 @@ impl<'de> Deserialize<'de> for Top {
     }
 }
 
-pub struct Engine<'a, 'b, 'c, 'd, 'e> {
+pub struct Engine<'a, 'b, 'c, 'd> {
     album_id: &'a str,
-    album: &'b mut Album<'c, 'd>,
-    fragments: &'e TransactionalTree,
+    album: &'b mut Album<'c>,
+    fragments: &'d TransactionalTree,
     /// Cache of `Section`s and their original `fragment_id`s if the `Section` already existed in
     /// the database. Amortizes serialization and `fragment_id` allocation by batching changes.
     cache: BTreeMap<i64, (Option<u64>, Section)>,
     top: Top,
+    force_update: bool,
 }
 
 type EngineResult<T> = ConflictableTransactionResult<T, ApiError>;
 
-impl<'a, 'b, 'c, 'd, 'e> Engine<'a, 'b, 'c, 'd, 'e> {
+impl<'a, 'b, 'c, 'd> Engine<'a, 'b, 'c, 'd> {
     /// # Example
     /// ```rust
     /// # use mod::test::dummy_db;
@@ -207,8 +208,8 @@ impl<'a, 'b, 'c, 'd, 'e> Engine<'a, 'b, 'c, 'd, 'e> {
     /// ```
     pub fn new(
         album_id: &'a str,
-        album: &'b mut Album<'c, 'd>,
-        fragments: &'e TransactionalTree,
+        album: &'b mut Album<'c>,
+        fragments: &'d TransactionalTree,
     ) -> EngineResult<Self> {
         let top_id = Self::get_id(album_id, album.fragment_head);
         let top_bytes = fragments.get(top_id)?.unwrap();
@@ -220,12 +221,13 @@ impl<'a, 'b, 'c, 'd, 'e> Engine<'a, 'b, 'c, 'd, 'e> {
             fragments,
             cache: BTreeMap::new(),
             top,
+            force_update: false,
         })
     }
 
     pub fn commit(mut self) -> EngineResult<()> {
         // Exit if no mutations are necessary.
-        if self.cache.len() == 0 {
+        if self.cache.len() == 0 && !self.force_update {
             return Ok(());
         }
 
@@ -276,6 +278,19 @@ impl<'a, 'b, 'c, 'd, 'e> Engine<'a, 'b, 'c, 'd, 'e> {
         Ok(())
     }
 
+    pub fn clear_all(&mut self) -> EngineResult<()> {
+        for details in self.top.0.values() {
+            self.delete(details.fragment_id)?;
+        }
+
+        self.top.0 = BTreeMap::new();
+        self.cache = BTreeMap::new();
+
+        self.force_update = true;
+
+        Ok(())
+    }
+
     pub fn add(&mut self, file_id: &str, file: &File) -> EngineResult<()> {
         let key = FileKey {
             time_stamp: file.metadata.last_modified,
@@ -305,6 +320,19 @@ impl<'a, 'b, 'c, 'd, 'e> Engine<'a, 'b, 'c, 'd, 'e> {
         })?;
 
         Ok(())
+    }
+
+    pub fn list_file_ids(&mut self) -> EngineResult<Vec<String>> {
+        let mut file_ids = vec![];
+
+        for details in self.top.0.values() {
+            let section = self.read(details.fragment_id)?;
+            for key in section.0.into_keys() {
+                file_ids.push(key.file_id);
+            }
+        }
+
+        Ok(file_ids)
     }
 
     /// Open the section on the day of timestamp `ts` and mutate by `f`.

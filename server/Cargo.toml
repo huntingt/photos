@@ -8,6 +8,7 @@ edition = "2018"
 hyper = "*"
 tokio = { version = "*", features = ["full"] }
 routerify = "*"
+routerify-query = "*"
 querystring = "*"
 futures = "*"
 

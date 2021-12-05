@@ -1,18 +1,22 @@
 mod album;
 mod common;
-mod engine;
 mod error;
 mod file;
 mod user;
+mod delete;
 
 use common::AppState;
-use error::ApiError;
-use hyper::{Body, Response, Server, StatusCode};
-use routerify::{Router, RouterService};
+use error::{ApiError, ApiResult};
+use hyper::{Body, Response, Server, StatusCode, Request};
+use routerify::{Router, RouterService, Middleware};
+use routerify::ext::RequestExt;
+use routerify_query::query_parser;
 use std::net::SocketAddr;
 
 async fn handle_error(error: routerify::RouteError) -> Response<Body> {
     let api_error = error.downcast::<ApiError>().unwrap();
+
+    println!("{}", api_error);
 
     match api_error.as_ref() {
         ApiError::Unauthorized => Response::builder().status(StatusCode::UNAUTHORIZED),
@@ -28,6 +32,11 @@ async fn handle_error(error: routerify::RouteError) -> Response<Body> {
     }
     .body(Body::from(api_error.to_string()))
     .unwrap()
+}
+
+async fn logger(req: Request<Body>) -> ApiResult<Request<Body>> {
+    println!("{} {} {}", req.remote_addr(), req.method(), req.uri().path());
+    Ok(req)
 }
 
 async fn shutdown_signal() {
@@ -48,7 +57,12 @@ async fn main() {
     let removed = file::clean_files(&state).await.unwrap();
     println!("Removed {} files", removed);
 
+    delete::Command::restore(&state)
+        .expect("Failed to restore pending deletions");
+
     let router = Router::builder()
+        .middleware(query_parser())
+        .middleware(Middleware::pre(logger))
         // Provide app state to routes
         .data(state)
         // Routes

@@ -1,5 +1,6 @@
 use crate::{
-    common::{auth_album, join, new_id, require_key, respond_ok, AppState, File},
+    delete,
+    common::{auth_album, join, new_id, require_key, respond_ok, test_logged_in, AppState, File, respond_ok_empty},
     error::{ApiError, ApiResult},
 };
 use async_stream::try_stream;
@@ -19,7 +20,7 @@ use tokio::{
     io::{self, AsyncReadExt, AsyncWriteExt},
     task::block_in_place,
 };
-use wire::{Album, FileList, FileMetadata, ListRequest, NewResource};
+use wire::{FileList, FileMetadata, ListRequest, NewResource};
 
 const UPLOAD_METADATA: &'static str = "upload-metadata";
 const MEDIUM_HEIGHT: f64 = 400.;
@@ -30,14 +31,6 @@ async fn upload(req: Request<Body>) -> ApiResult<Response<Body>> {
 
     let key = require_key(&parts)?;
     let (owner_id, _) = key.split_once('.').ok_or(ApiError::BadRequest)?;
-
-    let metadata_header = parts
-        .headers
-        .get(UPLOAD_METADATA)
-        .ok_or(ApiError::BadRequest)?;
-    let metadata_bytes = base64::decode_config(metadata_header, base64::URL_SAFE)
-        .map_err(|_| ApiError::BadRequest)?;
-    let metadata: FileMetadata = serde_json::from_slice(&metadata_bytes)?;
 
     let AppState {
         ref users,
@@ -53,9 +46,15 @@ async fn upload(req: Request<Body>) -> ApiResult<Response<Body>> {
 
     // Don't start uploading until we have verified that the user may be able
     // to save the file
-    sessions
-        .get(key.as_bytes())?
-        .ok_or(ApiError::Unauthorized)?;
+    test_logged_in(sessions, key)?;
+
+    let metadata_header = parts
+        .headers
+        .get(UPLOAD_METADATA)
+        .ok_or(ApiError::BadRequest)?;
+    let metadata_bytes = base64::decode_config(metadata_header, base64::URL_SAFE)
+        .map_err(|_| ApiError::BadRequest)?;
+    let metadata: FileMetadata = serde_json::from_slice(&metadata_bytes)?;
 
     let file_id = new_id(16);
     let owner_file_name = [&owner_id, ".", &metadata.name].concat();
@@ -178,6 +177,36 @@ async fn list(req: Request<Body>) -> ApiResult<Response<Body>> {
     })
 }
 
+async fn delete(req: Request<Body>) -> ApiResult<Response<Body>> {
+    let (parts, _) = req.into_parts();
+
+    let key = require_key(&parts)?;
+    let (owner_id, _) = key.split_once('.').ok_or(ApiError::BadRequest)?;
+
+    block_in_place(|| {
+        let state = parts.data().unwrap();
+        let AppState {
+            ref sessions,
+            ref files,
+            ..
+        } = state;
+
+        sessions.get(key)?.ok_or(ApiError::Unauthorized)?;
+
+        let file_id = parts.param("fileId").unwrap();
+        let file_bytes = files.get(file_id)?.ok_or(ApiError::NotFound)?;
+        let file: File = bincode::deserialize(&file_bytes).unwrap();
+
+        if file.owner_id != owner_id {
+            return Err(ApiError::NotFound);
+        }
+
+        delete::Command::File(file_id, file).run(state)?;
+
+        respond_ok_empty()
+    })
+}
+
 fn file_stream(mut file: fs::File, chunk_size: usize) -> impl Stream<Item = io::Result<Bytes>> {
     try_stream! {
         loop {
@@ -205,7 +234,7 @@ async fn serve(req: Request<Body>) -> ApiResult<Response<Body>> {
     let AppState {
         ref sessions,
         ref files,
-        ref albums,
+        ref user_to_album,
         ref upload_path,
         ref medium_path,
         ref small_path,
@@ -226,14 +255,9 @@ async fn serve(req: Request<Body>) -> ApiResult<Response<Body>> {
             }
         }
         Some(album_id) => {
-            let album_bytes = albums
-                .get(album_id.as_bytes())?
+            user_to_album
+                .get([user_id, ".", album_id].concat())?
                 .ok_or(ApiError::Unauthorized)?;
-            let album: Album = bincode::deserialize(&album_bytes).unwrap();
-
-            if album.owner_id != user_id {
-                return Err(ApiError::Unauthorized);
-            }
         }
     }
 
@@ -255,9 +279,10 @@ async fn serve(req: Request<Body>) -> ApiResult<Response<Body>> {
 
 pub fn router() -> Router<Body, ApiError> {
     Router::builder()
-        .post("/upload", upload)
-        .get("/list", list)
-        .get("/serve/:quality/:fileId", serve)
+        .post("/", upload)
+        .post("/list", list)
+        .delete("/:fileId", delete)
+        .get("/:quality/:fileId", serve)
         .build()
         .unwrap()
 }

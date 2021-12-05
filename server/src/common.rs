@@ -24,6 +24,7 @@ pub struct File<'a, 'b, 'c> {
 }
 
 pub struct AppState {
+    pub db: sled::Db,
     pub users: sled::Tree,
     pub emails: sled::Tree,
     pub sessions: sled::Tree,
@@ -32,6 +33,9 @@ pub struct AppState {
     pub albums: sled::Tree,
     pub inclusions: sled::Tree,
     pub fragments: sled::Tree,
+    pub user_to_album: sled::Tree,
+    pub album_to_user: sled::Tree,
+    pub delete: sled::Tree,
 
     pub argon_config: argon2::Config<'static>,
     pub upload_path: PathBuf,
@@ -53,6 +57,10 @@ impl AppState {
             albums: db.open_tree(b"albums").unwrap(),
             inclusions: db.open_tree(b"inclusions").unwrap(),
             fragments: db.open_tree(b"fragments").unwrap(),
+            user_to_album: db.open_tree(b"user_to_album").unwrap(),
+            album_to_user: db.open_tree(b"album_to_user").unwrap(),
+            delete: db.open_tree(b"delete").unwrap(),
+            db: db,
 
             argon_config: argon2::Config::default(),
 
@@ -93,6 +101,13 @@ pub fn require_key(parts: &Parts) -> ApiResult<&str> {
         .find(|(k, _)| k == &"key")
         .ok_or(ApiError::Unauthorized)?;
     Ok(key)
+}
+
+pub fn test_logged_in(sessions: &sled::Tree, key: &str) -> ApiResult<()> {
+    sessions
+        .get(key.as_bytes())?
+        .ok_or(ApiError::Unauthorized)?;
+    Ok(())
 }
 
 pub fn auth_album(parts: &Parts) -> Option<&str> {

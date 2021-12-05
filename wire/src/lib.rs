@@ -26,6 +26,12 @@ impl<'a, 'b> IntoOwned for UserDetails<'a, 'b> {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ChangePassword {
+    pub old_password: String,
+    pub new_password: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Key<'a> {
     #[serde(borrow)]
     pub key: Cow<'a, str>,
@@ -184,19 +190,17 @@ impl<'a> IntoOwned for IdList<'a> {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Album<'a, 'b> {
+pub struct Album<'a> {
     #[serde(borrow)]
-    pub owner_id: Cow<'a, str>,
-    #[serde(borrow)]
-    pub description: AlbumSettings<'b>,
+    pub description: AlbumSettings<'a>,
     pub fragment_head: u64,
     pub length: usize,
     pub last_update: i64,
     pub date_range: Option<(i64, i64)>,
 }
 
-impl<'a, 'b> IntoOwned for Album<'a, 'b> {
-    type Owned = Album<'static, 'static>;
+impl<'a> IntoOwned for Album<'a> {
+    type Owned = Album<'static>;
 
     fn into_owned(self) -> Self::Owned {
         Album {
@@ -204,8 +208,54 @@ impl<'a, 'b> IntoOwned for Album<'a, 'b> {
             length: self.length,
             last_update: self.last_update,
             date_range: self.date_range,
-            owner_id: Cow::Owned(self.owner_id.into_owned()),
             description: self.description.into_owned(),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum Role {
+    Owner,
+    Editor,
+    Reader,
+}
+
+impl Role {
+    pub fn can_write(&self) -> bool {
+        use Role::*;
+
+        match self {
+            Owner => true,
+            Editor => true,
+            Reader => false,
+        }
+    }
+
+    pub fn is_owner(&self) -> bool {
+        match self {
+            Role::Owner => true,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct PermissionPair<'a, 'b> {
+    #[serde(borrow)]
+    pub email: Cow<'a, str>,
+    #[serde(borrow)]
+    pub user_id: Option<Cow<'b, str>>,
+    pub role: Role,
+}
+
+impl<'a, 'b> IntoOwned for PermissionPair<'a, 'b> {
+    type Owned = PermissionPair<'static, 'static>;
+
+    fn into_owned(self) -> Self::Owned {
+        PermissionPair {
+            role: self.role,
+            user_id: self.user_id.map(|s| Cow::Owned(s.into_owned())),
+            email: Cow::Owned(self.email.into_owned()),
         }
     }
 }
