@@ -10,12 +10,12 @@ export default function Album(props) {
   const agent = useAgent();
   const navigate = useNavigate();
 
-  const [metadata, { refetch }] = createResource(params.id, agent().Album.metadata);
+  const [metadata, { refetch }] = createResource(params.id, agent.Album.metadata);
 
   const update = async (e) => {
     e.preventDefault();
     let el = e.target.elements;
-    await agent().Album.update(
+    await agent.Album.update(
       params.id,
       el["name"].value,
       el["time_zone"].value
@@ -24,7 +24,7 @@ export default function Album(props) {
   };
 
   const deleteAlbum = async (e) => {
-    await agent().Album.delete(params.id);
+    await agent.Album.delete(params.id);
     navigate("/");
   };
 

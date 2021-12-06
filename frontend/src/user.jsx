@@ -5,12 +5,12 @@ import { Link } from "solid-app-router";
 export default function User(props) {
   const agent = useAgent();
 
-  const [sessions, { refetch }] = createResource(agent().User.sessions);
+  const [sessions, { refetch }] = createResource(agent.User.sessions);
 
   const change_password = async (e) => {
     e.preventDefault();
     let el = e.target.elements;
-    await agent().User.change_password(
+    await agent.User.change_password(
       el["old"].value,
       el["new"].value
     );
@@ -33,11 +33,11 @@ export default function User(props) {
         <button type="submit">Update</button>
       </form>
       <h3>Sessions</h3>
-      <button onClick={() => agent().User.logout()}>Logout</button>
+      <button onClick={() => agent.User.logout()}>Logout</button>
       <For each={sessions()}>
         {(key, i) => (<div>
           {key}
-          <button onClick={() => agent().User.logout(key).then(() => refetch())}>
+          <button onClick={() => agent.User.logout(key).then(() => refetch())}>
             Logout
           </button>
         </div>)}

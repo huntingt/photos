@@ -9,7 +9,7 @@ export default function Login(props) {
   const submit = async (e) => {
     e.preventDefault();
     const el = e.target.elements;
-    await agent().User.login(
+    await agent.User.login(
       el["email"].value,
       el["password"].value
     );

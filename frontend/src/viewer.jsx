@@ -8,9 +8,9 @@ export default function Viewer(props) {
 
   createEffect(() => {
     const resolveUrl = (file_id, quality) =>
-      agent().File.resolveUrl(file_id, quality, props.album);
+      agent.File.resolveUrl(file_id, quality, props.album);
     const fragment = (fid) =>
-      agent().Album.fragment(props.album, fid);
+      agent.Album.fragment(props.album, fid);
 
     const viewer = new ViewerCore(
       root,

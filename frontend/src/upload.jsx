@@ -30,14 +30,14 @@ export default function Upload(props) {
     let ids = [];
     for (const file of uploads) {
       try {
-        ids.push(await agent().File.upload(file, timestamps[file.name]));
+        ids.push(await agent.File.upload(file, timestamps[file.name]));
         setStatus(p => [p[0]+1, p[1]]);
       } catch (e) {
         setStatus(p => [p[0], p[1]-1]);
       }
     }
     if (props.album) {
-      await agent().Album.add(props.album, ids);
+      await agent.Album.add(props.album, ids);
     }
     if (props.callback) {
       props.callback();

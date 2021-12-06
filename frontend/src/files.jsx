@@ -6,7 +6,7 @@ import { createResource } from "solid-js";
 export default function Files(props) {
   const agent = useAgent();
 
-  const [files, { refetch }] = createResource(() => agent().File.list());
+  const [files, { refetch }] = createResource(() => agent.File.list());
 
   return (
     <>

@@ -38,7 +38,7 @@ function AlbumEntry(props) {
 
 export default function Albums(props) {
   const agent = useAgent();
-  const [data, { refetch }] = createResource(agent().Album.list);
+  const [data, { refetch }] = createResource(agent.Album.list);
 
   const sortedAlbums = () => {
     let pairs = Object.entries(data());
@@ -49,7 +49,7 @@ export default function Albums(props) {
   const newAlbum = async (e) => {
     e.preventDefault();
     const el = e.target.elements;
-    await agent().Album.create(
+    await agent.Album.create(
       el["name"].value,
       Intl.DateTimeFormat().resolvedOptions().timeZone
     );

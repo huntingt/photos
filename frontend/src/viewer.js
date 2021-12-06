@@ -1,3 +1,5 @@
+import $ from "jquery";
+
 class Selections {
     constructor(core) { 
         this.core = core;

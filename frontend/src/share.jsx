@@ -3,18 +3,18 @@ import { createResource, createSignal } from "solid-js";
 
 export default function Share(props) {
   const agent = useAgent();
-  const [sharers, { refetch }] = createResource(props.album, agent().Album.shared_with);
+  const [sharers, { refetch }] = createResource(props.album, agent.Album.shared_with);
   
   const [searchString, setSearchString] = createSignal(null);
   const [search] = createResource(searchString, async email => {
-    if (email) return await agent().User.emails(email);
+    if (email) return await agent.User.emails(email);
     else return [];
   });
 
   const share = async (e) => {
     e.preventDefault();
     const el = e.target.elements;
-    await agent().Album.share(
+    await agent.Album.share(
       props.album,
       el["email"].value,
       el["edit"].checked ? "Editor" : "Reader"

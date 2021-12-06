@@ -11,9 +11,10 @@
   "license": "MIT",
   "devDependencies": {
     "vite": "^2.5.7",
-    "vite-plugin-solid": "^2.0.3"
+    "vite-plugin-solid": "2.1.0"
   },
   "dependencies": {
+    "jquery": "^3.6.0",
     "solid-app-router": "^0.1.13",
     "solid-js": "^1.1.3"
   }

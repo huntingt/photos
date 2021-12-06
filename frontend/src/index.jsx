@@ -1,4 +1,5 @@
 import { render } from "solid-js/web";
+
 import { Router, Routes, Route } from "solid-app-router";
 import { Provider } from "./agent/index.jsx";
 import Albums from "./albums.jsx";
