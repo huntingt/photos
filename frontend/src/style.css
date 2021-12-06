@@ -1,0 +1,132 @@
+.panel {
+    line-height: 0px;
+    position: relative;
+}
+
+.sticky {
+    position: sticky;
+    top: 25px;
+    width: 40%;
+    background: Gainsboro;
+    height: 50px;
+    border-radius: 25px;
+    z-index: 100;
+
+    left: 50%;
+    transform: translate(-50%, 0);
+}
+
+.noscroll {
+    overflow: hidden;
+    visibility: hidden;
+    width: 100%;
+}
+
+.placeholder {
+    position: relative;
+    top: 0;
+    display: inline-block;
+    
+    background-color: Gainsboro;
+    background-clip: padding-box;
+    
+    box-sizing: border-box;
+    border: 2px solid transparent;
+
+    line-height: 1em;
+    color: Grey;
+
+    padding: 50px;
+    text-align: center;
+}
+
+.row {
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+.section {
+    position: absolute;
+    left: 0;
+}
+
+div {
+    font-family: Arial, Helvetica, sans-serif;
+}
+
+div, img {
+    image-orientation: from-image;
+}
+
+.header {
+    line-height: 1em;
+    height: 50px;
+    display: flex;
+    align-items: center;
+    margin: 0px 2px;
+}
+
+.img {
+    position: inline;
+    top: 0;
+    display: inline-block;
+    
+    box-sizing: border-box;
+    border: 2px solid transparent;
+
+    background-clip: padding-box;
+    background-color: Gainsboro;
+    background-size: cover;
+    
+    object-fit: cover;
+}
+
+.img:hover {
+    opacity: 0.9;
+}
+
+.fullscreen {
+    position: fixed;
+    width: 101%;
+    height: 101%;
+
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    
+    background-color: black;
+    z-index: 1000;
+    visibility: visible;
+}
+
+.fullimg {
+    width: 100%;
+    height: 100%;
+
+    transition: opacity 0.3s;
+    object-fit: contain;
+}
+
+.selector {
+    position: relative;
+    margin: 7px;
+    width: 15px;
+    height: 15px;
+    
+    border: 3px solid transparent;
+    background: transparent;
+    background-clip:content-box;
+    border-radius: 43%;
+}
+
+.selector:hover {
+    background: white;
+    border: 3px solid black;
+    opacity: 0.7;
+}
+
+.selected, .selected:hover {
+    background: black;
+    border: 3px solid white;
+    opacity: 0.8;
+}
